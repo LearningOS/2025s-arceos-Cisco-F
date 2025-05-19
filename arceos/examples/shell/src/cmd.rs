@@ -1,3 +1,4 @@
+use std::collections::vec_deque::VecDeque;
 use std::fs::{self, File, FileType};
 use std::io::{self, prelude::*};
 use std::{string::String, vec::Vec};
@@ -27,6 +28,8 @@ const CMD_TABLE: &[(&str, CmdHandler)] = &[
     ("pwd", do_pwd),
     ("rm", do_rm),
     ("uname", do_uname),
+    ("rename", do_rename),
+    ("mv", do_mv),
 ];
 
 fn file_type_to_char(ty: FileType) -> char {
@@ -258,6 +261,40 @@ fn do_uname(_args: &str) {
         arch = arch,
         plat = platform,
     );
+}
+
+fn do_rename(args: &str) {
+    // println!("{:#}", args);
+    let parts: VecDeque<&str> = args.split(" ").collect::<VecDeque<&str>>();
+    let old_name = parts[0];
+    let new_name = parts[1];
+    match fs::rename(old_name, new_name) {
+        Ok(()) => {},
+        Err(e) => print_err!("rename", format_args!("cannot rename '{old_name}' to '{new_name}', err: {:?}", e)),
+    };
+}
+
+fn do_mv(args: &str) {
+    let parts: VecDeque<&str> = args.split(" ").collect::<VecDeque<&str>>();
+    let old_pos = parts[0];
+    let new_pos = parts[1];
+    let mut content: [u8; 10240]; // 10KiB
+    let content = match fs::read(old_pos) {
+        Err(e) => {
+            print_err!("read from '{}' failed! err: {:?}", old_pos, e);
+            return;
+        },
+        Ok(con) => con,
+    };
+
+    let parts = new_pos.split("/").collect::<Vec<&str>>();
+    for i in 0..parts.len() - 1 {
+        do_cd(&format!("{}{}", parts[i], "/"));
+    }
+    let mut file = File::create(parts[parts.len() - 1]).unwrap();
+    file.write(&content);
+
+    fs::remove_file(old_pos);
 }
 
 fn do_help(_args: &str) {
