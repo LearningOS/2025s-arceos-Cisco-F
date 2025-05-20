@@ -275,6 +275,7 @@ fn do_rename(args: &str) {
 }
 
 fn do_mv(args: &str) {
+    let cur_pos = fs::current_dir().unwrap();
     let parts: VecDeque<&str> = args.split(" ").collect::<VecDeque<&str>>();
     let old_pos = parts[0];
     let new_pos = parts[1];
@@ -291,10 +292,21 @@ fn do_mv(args: &str) {
     for i in 0..parts.len() - 1 {
         do_cd(&format!("{}{}", parts[i], "/"));
     }
-    let mut file = File::create(parts[parts.len() - 1]).unwrap();
+
+    let tmp = old_pos.split("/").collect::<Vec<&str>>();
+    let len = tmp.len();
+    let name = tmp
+        .iter()
+        .enumerate()
+        .find(|(idx, _)| *idx == len - 1)
+        .map(|(_, name)| *name)
+        .unwrap();
+    println!("new file pos: {}", format!("{}/{}", new_pos, name));
+    let mut file = File::create(&format!("{}/{}", new_pos, name)).unwrap();
     file.write(&content);
 
     fs::remove_file(old_pos);
+    fs::set_current_dir(&cur_pos);
 }
 
 fn do_help(_args: &str) {

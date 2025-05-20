@@ -75,3 +75,11 @@ pub fn remove_file(path: &str) -> io::Result<()> {
 pub fn rename(old: &str, new: &str) -> io::Result<()> {
     arceos_api::fs::ax_rename(old, new)
 }
+
+pub fn current_dir() -> io::Result<String> {
+    arceos_api::fs::ax_current_dir()
+}
+
+pub fn set_current_dir(path: &str) -> io::Result<()> {
+    arceos_api::fs::ax_set_current_dir(path)
+}
