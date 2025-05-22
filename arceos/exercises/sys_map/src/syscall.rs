@@ -1,13 +1,18 @@
 #![allow(dead_code)]
 
 use core::ffi::{c_void, c_char, c_int};
+use arceos_posix_api::get_file_like;
 use axhal::arch::TrapFrame;
-use axhal::trap::{register_trap_handler, SYSCALL};
 use axerrno::LinuxError;
 use axtask::current;
 use axtask::TaskExtRef;
 use axhal::paging::MappingFlags;
 use arceos_posix_api as api;
+
+use axhal::trap::{register_trap_handler, PAGE_FAULT, SYSCALL};
+use memory_addr::MemoryAddr;
+use memory_addr::VirtAddr;
+use memory_addr::VirtAddrRange;
 
 const SYS_IOCTL: usize = 29;
 const SYS_OPENAT: usize = 56;
@@ -100,7 +105,7 @@ bitflags::bitflags! {
 fn handle_syscall(tf: &TrapFrame, syscall_num: usize) -> isize {
     ax_println!("handle_syscall [{}] ...", syscall_num);
     let ret = match syscall_num {
-         SYS_IOCTL => sys_ioctl(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _) as _,
+        SYS_IOCTL => sys_ioctl(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _) as _,
         SYS_SET_TID_ADDRESS => sys_set_tid_address(tf.arg0() as _),
         SYS_OPENAT => sys_openat(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _, tf.arg3() as _),
         SYS_CLOSE => sys_close(tf.arg0() as _),
@@ -140,7 +145,43 @@ fn sys_mmap(
     fd: i32,
     _offset: isize,
 ) -> isize {
-    unimplemented!("no sys_mmap!");
+    let current = current();
+    let mut uspace = current.task_ext().aspace.lock();
+    let Some(va) = uspace.find_free_area(
+        VirtAddr::from(addr as usize + 0x100000),
+        length.align_up_4k(),
+        VirtAddrRange::from_start_size(uspace.base(), uspace.size()),
+    ) else {
+        error!("cannot find a free area");
+        return -1;
+    };
+
+    let flag = MmapProt::from_bits_truncate(prot);
+    if let Err(e) = uspace.map_alloc(va, length.align_up_4k(), flag.into(), true) {
+        error!("map alloc failed! err: {}", e);
+        return -1;
+    }
+
+    let file = match get_file_like(fd) {
+        Ok(f) => f,
+        Err(e) => {
+            error!("get file like failed! err: {}", e);
+            return -1;
+        },
+    };
+
+    let mut buf = alloc::vec![0; length];
+    if let Err(e) = file.read(&mut buf) {
+        error!("read file failed! err: {}", e);
+        return -1;
+    }
+
+    if let Err(e) = uspace.write(va, &buf) {
+        error!("write to uspace failed! err: {}", e);
+        return -1;
+    }
+
+    va.as_usize() as isize
 }
 
 fn sys_openat(dfd: c_int, fname: *const c_char, flags: c_int, mode: api::ctypes::mode_t) -> isize {
@@ -173,4 +214,24 @@ fn sys_set_tid_address(tid_ptd: *const i32) -> isize {
 fn sys_ioctl(_fd: i32, _op: usize, _argp: *mut c_void) -> i32 {
     ax_println!("Ignore SYS_IOCTL");
     0
+}
+
+#[register_trap_handler(PAGE_FAULT)]
+fn handle_page_fault(vaddr: VirtAddr, access_flags: MappingFlags, is_user: bool) -> bool {
+    if is_user {
+        if !axtask::current()
+            .task_ext()
+            .aspace
+            .lock()
+            .handle_page_fault(vaddr, access_flags)
+        {
+            ax_println!("{}: segmentation fault, exit!", axtask::current().id_name());
+            axtask::exit(-1);
+        } else {
+            ax_println!("{}: handle page fault OK!", axtask::current().id_name());
+        }
+        true
+    } else {
+        false
+    }
 }
